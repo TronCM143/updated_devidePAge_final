@@ -149,8 +149,6 @@ class _MapPageState extends State<MapPage> {
           _currentP =
               LatLng(currentLocation.latitude!, currentLocation.longitude!);
         });
-        _uploadLocationToFirestore(
-            currentLocation.latitude!, currentLocation.longitude!);
       }
     });
   }
