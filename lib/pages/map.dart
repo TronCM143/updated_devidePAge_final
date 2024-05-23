@@ -25,7 +25,8 @@ class _MapPageState extends State<MapPage> {
   static const LatLng _pGooglePlex =
       LatLng(6.485651218461966, 124.85593053388185);
 
-  StreamSubscription<DocumentSnapshot>? _locationSubscription;
+  StreamSubscription<LocationData>? _locationSubscription;
+  StreamSubscription<DocumentSnapshot>? _selectedUserLocationSubscription;
 
   @override
   void initState() {
@@ -38,6 +39,7 @@ class _MapPageState extends State<MapPage> {
   @override
   void dispose() {
     _locationSubscription?.cancel();
+    _selectedUserLocationSubscription?.cancel();
     super.dispose();
   }
 
@@ -47,6 +49,141 @@ class _MapPageState extends State<MapPage> {
       _userEmail =
           user?.email; // Set the initial email to the current user's email
     });
+  }
+
+  Future<void> _getLocationUpdates() async {
+    try {
+      await LocationService.getLocationUpdates();
+      _locationSubscription =
+          LocationService.locationStream.listen((LocationData locationData) {
+        setState(() {
+          _currentP = LatLng(locationData.latitude!, locationData.longitude!);
+          _uploadLocationToFirestore(locationData.latitude!, locationData.longitude!);
+        });
+      });
+    } catch (e) {
+      print('Error getting location updates: $e');
+    }
+  }
+
+  Future<void> _uploadLocationToFirestore(
+      double latitude, double longitude) async {
+    try {
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        String userEmail = user.email!;
+        await FirebaseFirestore.instance
+            .collection('googleAccounts')
+            .doc(userEmail) // Use the current user's email
+            .set({
+          'location': GeoPoint(latitude, longitude),
+        }, SetOptions(merge: true));
+        print('Location uploaded to Firestore');
+      }
+    } catch (e) {
+      print('Error uploading location to Firestore: $e');
+    }
+  }
+
+  Future<void> _fetchAccountsFromFirestore() async {
+    try {
+      QuerySnapshot querySnapshot =
+          await FirebaseFirestore.instance.collection('googleAccounts').get();
+      setState(() {
+        _accounts = querySnapshot.docs;
+      });
+    } catch (e) {
+      print('Error fetching accounts: $e');
+    }
+  }
+
+  Future<void> _fetchLocationFromFirestore(String email) async {
+    try {
+      DocumentSnapshot documentSnapshot = await FirebaseFirestore.instance
+          .collection('googleAccounts')
+          .doc(email)
+          .get();
+
+      if (documentSnapshot.exists) {
+        var locationData = documentSnapshot['location'] as GeoPoint?;
+        if (locationData != null) {
+          double latitude = locationData.latitude;
+          double longitude = locationData.longitude;
+          LatLng newLocation = LatLng(latitude, longitude);
+          setState(() {
+            _selectedLocation = newLocation;
+          });
+          _cameraToPosition(_currentP!, _selectedLocation!);
+        }
+
+        _selectedUserLocationSubscription?.cancel(); // Cancel any previous subscription
+        _selectedUserLocationSubscription =
+            documentSnapshot.reference.snapshots().listen((snapshot) {
+          if (snapshot.exists) {
+            var locationData = snapshot['location'] as GeoPoint?;
+            if (locationData != null) {
+              double latitude = locationData.latitude;
+              double longitude = locationData.longitude;
+              LatLng newLocation = LatLng(latitude, longitude);
+              setState(() {
+                _selectedLocation = newLocation;
+              });
+              _cameraToPosition(_currentP!, _selectedLocation!);
+            }
+          }
+        });
+      }
+    } catch (e) {
+      print('Error fetching location from Firestore: $e');
+    }
+  }
+
+  Future<void> _cameraToPosition(LatLng pos1, LatLng pos2) async {
+    final GoogleMapController controller = await _mapController.future;
+
+    // Calculate the bounds that include both positions
+    LatLngBounds bounds = LatLngBounds(
+      southwest: LatLng(
+        pos1.latitude <= pos2.latitude ? pos1.latitude : pos2.latitude,
+        pos1.longitude <= pos2.longitude ? pos1.longitude : pos2.longitude,
+      ),
+      northeast: LatLng(
+        pos1.latitude >= pos2.latitude ? pos1.latitude : pos2.latitude,
+        pos1.longitude >= pos2.longitude ? pos1.longitude : pos2.longitude,
+      ),
+    );
+
+    // Adjust the camera position to fit the bounds
+    CameraUpdate cameraUpdate = CameraUpdate.newLatLngBounds(bounds, 50);
+
+    await controller.animateCamera(cameraUpdate);
+  }
+
+  Set<Marker> _buildMarkers() {
+    Set<Marker> markers = {};
+
+    if (_currentP != null) {
+      markers.add(
+        Marker(
+          markerId: MarkerId("_currentLocation"),
+          icon:
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          position: _currentP!,
+        ),
+      );
+    }
+
+    if (_selectedLocation != null) {
+      markers.add(
+        Marker(
+          markerId: const MarkerId("_selectedLocation"),
+          icon: BitmapDescriptor.defaultMarker,
+          position: _selectedLocation!,
+        ),
+      );
+    }
+
+    return markers;
   }
 
   @override
@@ -92,99 +229,6 @@ class _MapPageState extends State<MapPage> {
     );
   }
 
-  Set<Marker> _buildMarkers() {
-    Set<Marker> markers = {};
-
-    if (_currentP != null) {
-      markers.add(
-        Marker(
-          markerId: MarkerId("_currentLocation"),
-          icon:
-              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-          position: _currentP!,
-        ),
-      );
-    }
-
-    if (_selectedLocation != null) {
-      markers.add(
-        Marker(
-          markerId: const MarkerId("_selectedLocation"),
-          icon: BitmapDescriptor.defaultMarker,
-          position: _selectedLocation!,
-        ),
-      );
-    }
-
-    return markers;
-  }
-
-  Future<void> _cameraToPosition(LatLng pos1, LatLng pos2) async {
-    final GoogleMapController controller = await _mapController.future;
-
-    // Calculate the bounds that include both positions
-    LatLngBounds bounds = LatLngBounds(
-      southwest: LatLng(
-        pos1.latitude <= pos2.latitude ? pos1.latitude : pos2.latitude,
-        pos1.longitude <= pos2.longitude ? pos1.longitude : pos2.longitude,
-      ),
-      northeast: LatLng(
-        pos1.latitude >= pos2.latitude ? pos1.latitude : pos2.latitude,
-        pos1.longitude >= pos2.longitude ? pos1.longitude : pos2.longitude,
-      ),
-    );
-
-    // Adjust the camera position to fit the bounds
-    CameraUpdate cameraUpdate = CameraUpdate.newLatLngBounds(bounds, 50);
-
-    await controller.animateCamera(cameraUpdate);
-  }
-
-  Future<void> _fetchAccountsFromFirestore() async {
-    try {
-      QuerySnapshot querySnapshot =
-          await FirebaseFirestore.instance.collection('googleAccounts').get();
-      setState(() {
-        _accounts = querySnapshot.docs;
-      });
-    } catch (e) {
-      print('Error fetching accounts: $e');
-    }
-  }
-
-  Future<void> _getLocationUpdates() async {
-    try {
-      LocationService.getLocationUpdates();
-      _locationSubscription =
-          LocationService.locationStream.listen((LocationData locationData) {
-        setState(() {
-          _currentP = LatLng(locationData.latitude!, locationData.longitude!);
-        });
-      }) as StreamSubscription<DocumentSnapshot<Object?>>?;
-    } catch (e) {
-      print('Error getting location updates: $e');
-    }
-  }
-
-  Future<void> _uploadLocationToFirestore(
-      double latitude, double longitude) async {
-    try {
-      User? user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        String userEmail = user.email!;
-        await FirebaseFirestore.instance
-            .collection('googleAccounts')
-            .doc(userEmail) // Use the current user's email
-            .set({
-          'location': GeoPoint(latitude, longitude),
-        }, SetOptions(merge: true));
-        print('Location uploaded to Firestore');
-      }
-    } catch (e) {
-      print('Error uploading location to Firestore: $e');
-    }
-  }
-
   Future<void> _showEntityListDialog() async {
     await showDialog(
       context: context,
@@ -205,46 +249,5 @@ class _MapPageState extends State<MapPage> {
         );
       },
     );
-  }
-
-  Future<void> _fetchLocationFromFirestore(String email) async {
-    try {
-      DocumentSnapshot documentSnapshot = await FirebaseFirestore.instance
-          .collection('googleAccounts')
-          .doc(email)
-          .get();
-
-      if (documentSnapshot.exists) {
-        var locationData = documentSnapshot['location'] as GeoPoint?;
-        if (locationData != null) {
-          double latitude = locationData.latitude;
-          double longitude = locationData.longitude;
-          LatLng newLocation = LatLng(latitude, longitude);
-          setState(() {
-            _selectedLocation = newLocation;
-          });
-          _cameraToPosition(_currentP!, _selectedLocation!);
-        }
-
-        _locationSubscription?.cancel(); // Cancel any previous subscription
-        _locationSubscription =
-            documentSnapshot.reference.snapshots().listen((snapshot) {
-          if (snapshot.exists) {
-            var locationData = snapshot['location'] as GeoPoint?;
-            if (locationData != null) {
-              double latitude = locationData.latitude;
-              double longitude = locationData.longitude;
-              LatLng newLocation = LatLng(latitude, longitude);
-              setState(() {
-                _selectedLocation = newLocation;
-              });
-              _cameraToPosition(_currentP!, _selectedLocation!);
-            }
-          }
-        });
-      }
-    } catch (e) {
-      print('Error fetching location from Firestore: $e');
-    }
   }
 }
