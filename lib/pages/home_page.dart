@@ -17,7 +17,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   int myIndex = 0;
-  List<Widget> navigationList = const [MapPage(), DevicesPage(), ProfilePage()];
+  List<Widget> navigationList = [MapPage(), DevicesPage(), ProfilePage()];
 
   @override
   Widget build(BuildContext context) {

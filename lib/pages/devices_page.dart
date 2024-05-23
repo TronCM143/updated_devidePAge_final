@@ -1,23 +1,78 @@
 import 'package:flutter/material.dart';
-import 'package:firebase_auth/firebase_auth.dart'; // Import FirebaseAuth
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'device_operations.dart';
 
 class DevicesPage extends StatefulWidget {
-  const DevicesPage({Key? key}) : super(key: key);
+  DevicesPage({Key? key}) : super(key: key);
 
   @override
   State<DevicesPage> createState() => _DevicesPageState();
 }
 
 class _DevicesPageState extends State<DevicesPage> {
-  Map<String, dynamic>? _personalInfo;
   List<Map<String, dynamic>> _deviceRequests = [];
   List<Map<String, dynamic>> _pairedDevices = [];
+  bool _isMounted = false;
 
   @override
   void initState() {
     super.initState();
-    // Fetch personal information of the current device
+    _isMounted = true;
+    _fetchPairedDevices();
+    _fetchDeviceRequests(); // Fetch device requests on page load
+  }
+
+  @override
+  void dispose() {
+    _isMounted = false;
+    super.dispose();
+  }
+
+  void _fetchPairedDevices() async {
+    User? user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      String currentDeviceEmail = user.email!;
+      QuerySnapshot pairedDevicesSnapshot = await FirebaseFirestore.instance
+          .collection('googleAccounts')
+          .doc(currentDeviceEmail)
+          .collection('pairedDevices')
+          .get();
+
+      List<Map<String, dynamic>> pairedDevices = [];
+      for (var doc in pairedDevicesSnapshot.docs) {
+        pairedDevices.add(doc.data() as Map<String, dynamic>);
+      }
+
+      if (_isMounted) {
+        setState(() {
+          _pairedDevices = pairedDevices;
+        });
+      }
+    }
+  }
+
+  void _fetchDeviceRequests() async {
+    User? user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      String currentDeviceEmail = user.email!;
+      QuerySnapshot requestsSnapshot = await FirebaseFirestore.instance
+          .collection('googleAccounts')
+          .doc(currentDeviceEmail)
+          .collection('deviceRequests')
+          .get();
+
+      List<Map<String, dynamic>> deviceRequests = [];
+      for (var doc in requestsSnapshot.docs) {
+        deviceRequests.add(doc.data() as Map<String, dynamic>);
+      }
+
+      if (_isMounted) {
+        setState(() {
+          _deviceRequests = deviceRequests;
+        });
+      }
+    }
   }
 
   @override
@@ -28,7 +83,8 @@ class _DevicesPageState extends State<DevicesPage> {
           title: Text('Devices'),
           actions: [
             IconButton(
-              onPressed: _viewRequests,
+              onPressed: () => DeviceOperations.viewRequests(
+                  context, _deviceRequests, _acceptRequest, _cancelRequest),
               icon: Icon(Icons.notifications),
             ),
           ],
@@ -86,46 +142,57 @@ class _DevicesPageState extends State<DevicesPage> {
                       itemCount: _pairedDevices.length,
                       itemBuilder: (context, index) {
                         var device = _pairedDevices[index];
-                        return ListTile(
-                          title: Text(device['email']),
-                          subtitle: Text(
-                            'Name: ${device['name']}, Age: ${device['age']}',
+                        return Container(
+                          padding: EdgeInsets.all(16),
+                          margin:
+                              EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Colors.grey),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Email: ${device['email']}',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(height: 8),
+                              Text('Name: ${device['name'] ?? 'N/A'}'),
+                              Text('Age: ${device['age'] ?? 'N/A'}'),
+                              Text(
+                                  'Device Model: ${device['deviceModel'] ?? 'N/A'}'),
+                            ],
                           ),
                         );
                       },
                     )
                   : Center(
-                      child: ElevatedButton(
-                        onPressed: () => _addDevice(),
-                        child: Text('Add Device'),
-                      ),
+                      child: Text('No paired devices.'),
                     ),
             ),
           ],
         ),
         floatingActionButton: FloatingActionButton(
-          onPressed: _viewRequests,
-          child: Icon(Icons.notifications),
+          onPressed: () => _sendDeviceRequest('email@example.com'),
+          child: Icon(Icons.add),
         ),
       ),
     );
   }
 
   Future<DocumentSnapshot> _getPersonalInfo() async {
-    // Get the current user from FirebaseAuth
     User? user = FirebaseAuth.instance.currentUser;
-
-    // Check if user is authenticated
     if (user != null) {
-      String currentDeviceEmail =
-          user.email!; // Get the email of the current user
-      // Fetch personal information using the current device's email
+      String currentDeviceEmail = user.email!;
       DocumentSnapshot doc = await FirebaseFirestore.instance
           .collection('googleAccounts')
           .doc(currentDeviceEmail)
           .collection('personalInfo')
-          .doc(
-              'info') // Assuming 'info' is the document ID containing the personal info
+          .doc('info')
           .get();
 
       return doc;
@@ -134,117 +201,29 @@ class _DevicesPageState extends State<DevicesPage> {
     }
   }
 
-  void _viewRequests() {
-    // Fetch device requests from Firestore
-    FirebaseFirestore.instance
-        .collection('googleAccounts')
-        .where('requests', isEqualTo: true)
-        .get()
-        .then((querySnapshot) {
-      List<Map<String, dynamic>> requests = [];
-      querySnapshot.docs.forEach((doc) {
-        requests.add(doc.data());
-      });
-
-      setState(() {
-        _deviceRequests = requests;
-      });
-
-      // Show pop-up container
-      showDialog(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: Text('Device Requests'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: _deviceRequests.map((request) {
-                return ListTile(
-                  title: Text(request['email']),
-                  subtitle:
-                      Text('Name: ${request['name']}, Age: ${request['age']}'),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        onPressed: () => _acceptRequest(request),
-                        icon: Icon(Icons.check),
-                      ),
-                      IconButton(
-                        onPressed: () => _cancelRequest(request),
-                        icon: Icon(Icons.close),
-                      ),
-                    ],
-                  ),
-                );
-              }).toList(),
-            ),
-          );
-        },
-      );
-    });
+  void _acceptRequest(Map<String, dynamic> request) async {
+    DeviceOperations.acceptRequest(request, _fetchPairedDeviceDetails, context);
   }
 
-  void _acceptRequest(Map<String, dynamic> request) {
-    // Fetch requested device info from Firestore and display
-    // Assuming 'personalInfo' is the subcollection name
-    FirebaseFirestore.instance
-        .collection('googleAccounts')
-        .doc(request['email'])
-        .collection('personalInfo')
-        .doc('info')
-        .get()
-        .then((doc) {
-      var deviceInfo = doc.data();
-
-      // Display requested device info
-      showDialog(
-        context: context,
-        builder: (context) {
-          return AlertDialog(
-            title: Text('Requested Device Info'),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Email: ${request['email']}'),
-                Text('Name: ${deviceInfo?['name'] ?? 'N/A'}'),
-                Text('Age: ${deviceInfo?['age'] ?? 'N/A'}'),
-                // Display other device info fields as needed
-              ],
-            ),
-          );
-        },
-      );
-    });
-
-    // Remove request from Firestore
-    FirebaseFirestore.instance
-        .collection('googleAccounts')
-        .doc(request['email'])
-        .update({
-      'requests': false
-    }); // Assuming 'requests' field controls device requests
+  void _cancelRequest(Map<String, dynamic> request) async {
+    DeviceOperations.cancelRequest(
+      request,
+      _deviceRequests,
+      () => setState(() {}),
+    );
   }
 
-  void _cancelRequest(Map<String, dynamic> request) {
-    // Cancel device request
-    // Remove request from Firestore
-    FirebaseFirestore.instance
-        .collection('googleAccounts')
-        .doc(request['email'])
-        .update({
-      'requests': false
-    }); // Assuming 'requests' field controls device requests
-
-    // Update UI
-    setState(() {
-      _deviceRequests.remove(request);
-    });
+  void _sendDeviceRequest(String email) async {
+    String currentUserEmail = FirebaseAuth.instance.currentUser!.email!;
+    DeviceOperations.showAddDeviceDialog(context, email, currentUserEmail);
   }
 
-  void _addDevice() {
-    // Implement adding a device
-    print('Adding a new device');
+  void _fetchPairedDeviceDetails(String email) {
+    DeviceOperations.fetchPairedDeviceDetails(
+      email,
+      _pairedDevices,
+      () => setState(() {}),
+      context,
+    );
   }
 }
