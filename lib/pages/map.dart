@@ -4,7 +4,7 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:location/location.dart';
-import 'package:mapa/services/location_service.dart';
+import '../services/location_service.dart';
 import 'select_entity_dialog.dart';
 
 class MapPage extends StatefulWidget {
@@ -119,14 +119,25 @@ class _MapPageState extends State<MapPage> {
     return markers;
   }
 
-  Future<void> _cameraToPosition(LatLng pos) async {
+  Future<void> _cameraToPosition(LatLng pos1, LatLng pos2) async {
     final GoogleMapController controller = await _mapController.future;
-    CameraPosition _newCameraPosition = CameraPosition(
-      target: pos,
-      zoom: 13,
+
+    // Calculate the bounds that include both positions
+    LatLngBounds bounds = LatLngBounds(
+      southwest: LatLng(
+        pos1.latitude <= pos2.latitude ? pos1.latitude : pos2.latitude,
+        pos1.longitude <= pos2.longitude ? pos1.longitude : pos2.longitude,
+      ),
+      northeast: LatLng(
+        pos1.latitude >= pos2.latitude ? pos1.latitude : pos2.latitude,
+        pos1.longitude >= pos2.longitude ? pos1.longitude : pos2.longitude,
+      ),
     );
-    await controller
-        .animateCamera(CameraUpdate.newCameraPosition(_newCameraPosition));
+
+    // Adjust the camera position to fit the bounds
+    CameraUpdate cameraUpdate = CameraUpdate.newLatLngBounds(bounds, 50);
+
+    await controller.animateCamera(cameraUpdate);
   }
 
   Future<void> _fetchAccountsFromFirestore() async {
@@ -142,24 +153,30 @@ class _MapPageState extends State<MapPage> {
   }
 
   Future<void> _getLocationUpdates() async {
-    LocationService.getLocationUpdates((LocationData currentLocation) {
-      if (currentLocation.latitude != null &&
-          currentLocation.longitude != null) {
+    try {
+      LocationService.getLocationUpdates();
+      LocationData? currentLocation =
+          await LocationService.getCurrentLocation();
+      if (currentLocation != null) {
         setState(() {
           _currentP =
               LatLng(currentLocation.latitude!, currentLocation.longitude!);
         });
       }
-    });
+    } catch (e) {
+      print('Error getting location updates: $e');
+    }
   }
 
   Future<void> _uploadLocationToFirestore(
       double latitude, double longitude) async {
     try {
-      if (_userEmail != null) {
+      User? user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        String userEmail = user.email!;
         await FirebaseFirestore.instance
             .collection('googleAccounts')
-            .doc(_userEmail)
+            .doc(userEmail) // Use the current user's email
             .set({
           'location': GeoPoint(latitude, longitude),
         }, SetOptions(merge: true));
@@ -174,8 +191,12 @@ class _MapPageState extends State<MapPage> {
     await showDialog(
       context: context,
       builder: (BuildContext context) {
+        // Filter out the current user's email from the accounts list
+        List<DocumentSnapshot> filteredAccounts =
+            _accounts.where((account) => account.id != _userEmail).toList();
+
         return SelectEntityDialog(
-          accounts: _accounts,
+          accounts: filteredAccounts,
           onEntitySelected: (emailDoc) {
             String email = emailDoc.id; // Use the document ID as the email
             setState(() {
@@ -201,12 +222,10 @@ class _MapPageState extends State<MapPage> {
           double latitude = locationData.latitude;
           double longitude = locationData.longitude;
           LatLng newLocation = LatLng(latitude, longitude);
-          print(
-              'New location fetched: $newLocation'); // Debugging print statement
           setState(() {
             _selectedLocation = newLocation;
           });
-          _cameraToPosition(newLocation);
+          _cameraToPosition(_currentP!, _selectedLocation!);
         }
 
         _locationSubscription?.cancel(); // Cancel any previous subscription
@@ -218,12 +237,10 @@ class _MapPageState extends State<MapPage> {
               double latitude = locationData.latitude;
               double longitude = locationData.longitude;
               LatLng newLocation = LatLng(latitude, longitude);
-              print(
-                  'New location fetched: $newLocation'); // Debugging print statement
               setState(() {
                 _selectedLocation = newLocation;
               });
-              _cameraToPosition(newLocation);
+              _cameraToPosition(_currentP!, _selectedLocation!);
             }
           }
         });
