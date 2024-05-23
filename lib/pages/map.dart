@@ -98,7 +98,7 @@ class _MapPageState extends State<MapPage> {
     if (_currentP != null) {
       markers.add(
         Marker(
-          markerId: const MarkerId("_currentLocation"),
+          markerId: MarkerId("_currentLocation"),
           icon:
               BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
           position: _currentP!,
@@ -155,14 +155,12 @@ class _MapPageState extends State<MapPage> {
   Future<void> _getLocationUpdates() async {
     try {
       LocationService.getLocationUpdates();
-      LocationData? currentLocation =
-          await LocationService.getCurrentLocation();
-      if (currentLocation != null) {
+      _locationSubscription =
+          LocationService.locationStream.listen((LocationData locationData) {
         setState(() {
-          _currentP =
-              LatLng(currentLocation.latitude!, currentLocation.longitude!);
+          _currentP = LatLng(locationData.latitude!, locationData.longitude!);
         });
-      }
+      }) as StreamSubscription<DocumentSnapshot<Object?>>?;
     } catch (e) {
       print('Error getting location updates: $e');
     }

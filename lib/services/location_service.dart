@@ -1,9 +1,13 @@
 import 'package:location/location.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:location/location.dart';
 
 class LocationService {
   static final Location _locationController = Location();
+
+  static Stream<LocationData> get locationStream =>
+      _locationController.onLocationChanged;
 
   static Future<void> getLocationUpdates() async {
     bool _serviceEnabled;
@@ -24,34 +28,6 @@ class LocationService {
       if (_permissionGranted != PermissionStatus.granted) {
         // Handle the case where the user denies location permission
         return;
-      }
-    }
-
-    // Get the current user's email
-    User? user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      String userEmail = user.email!;
-
-      // Listen for location updates
-      try {
-        _locationController.onLocationChanged
-            .listen((LocationData locationData) async {
-          double latitude = locationData.latitude!;
-          double longitude = locationData.longitude!;
-
-          // Store the location in Firestore under the current user's email
-          await FirebaseFirestore.instance
-              .collection('googleAccounts')
-              .doc(userEmail)
-              .set({
-            'location': GeoPoint(latitude, longitude),
-          }, SetOptions(merge: true));
-
-          print('Location uploaded to Firestore');
-        });
-      } catch (e) {
-        // Handle any errors that occur while listening for location updates
-        print('Error getting location updates: $e');
       }
     }
   }
