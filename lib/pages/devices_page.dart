@@ -80,7 +80,13 @@ class _DevicesPageState extends State<DevicesPage> {
     return SafeArea(
       child: Scaffold(
         appBar: AppBar(
-          title: Text('Devices'),
+          title: const Text(
+            'Devices',
+            style: TextStyle(
+                fontFamily: 'montserrat',
+                fontWeight: FontWeight.w900,
+                color: Colors.black),
+          ),
           actions: [
             IconButton(
               onPressed: () => DeviceOperations.viewRequests(

@@ -43,15 +43,17 @@ class _AddDeviceDialogState extends State<AddDeviceDialog> {
         'sentRequestFrom': currentUserEmail,
       });
 
-      // Close the dialog after sending the request
-      Navigator.pop(context);
-
       // Show a confirmation snackbar
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Device request sent to $email'),
         ),
       );
+
+      // Delay the popping of the dialog until after the animation has completed
+      Future.delayed(Duration(milliseconds: 500), () {
+        Navigator.pop(context);
+      });
     } catch (error) {
       // Handle errors if necessary
       print("Error sending device request: $error");

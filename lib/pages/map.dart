@@ -1,9 +1,14 @@
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:location/location.dart';
+import 'package:http/http.dart' as http;
+import 'dart:ui' as ui;
+import 'package:google_sign_in/google_sign_in.dart';
+
 import '../services/location_service.dart';
 import 'select_entity_dialog.dart';
 
@@ -22,15 +27,19 @@ class _MapPageState extends State<MapPage> {
   List<DocumentSnapshot> _accounts = [];
   LatLng? _selectedLocation;
   String? _userEmail;
+  BitmapDescriptor? _currentMarkerIcon;
+  BitmapDescriptor? _selectedMarkerIcon;
   static const LatLng _pGooglePlex =
       LatLng(6.485651218461966, 124.85593053388185);
 
   StreamSubscription<LocationData>? _locationSubscription;
   StreamSubscription<DocumentSnapshot>? _selectedUserLocationSubscription;
+  String? _profilePictureUrl;
 
   @override
   void initState() {
     super.initState();
+    _loadProfilePicture();
     _getLocationUpdates();
     _fetchAccountsFromFirestore();
     _getUserEmail();
@@ -43,12 +52,116 @@ class _MapPageState extends State<MapPage> {
     super.dispose();
   }
 
+  Future<void> _loadProfilePicture() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser != null) {
+      if (currentUser.providerData.any((userInfo) =>
+          userInfo.providerId == GoogleAuthProvider.PROVIDER_ID)) {
+        final GoogleSignIn googleSignIn = GoogleSignIn();
+        final googleUser = await googleSignIn.signInSilently();
+        if (googleUser != null) {
+          setState(() {
+            _profilePictureUrl = googleUser.photoUrl;
+          });
+          await _storeProfilePictureToFirestore(
+              currentUser.email!, _profilePictureUrl);
+        }
+      } else {
+        setState(() {
+          _profilePictureUrl = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _storeProfilePictureToFirestore(
+      String email, String? profilePictureUrl) async {
+    try {
+      final userRef =
+          FirebaseFirestore.instance.collection('googleAccounts').doc(email);
+      await userRef
+          .set({'profileImageUrl': profilePictureUrl}, SetOptions(merge: true));
+      print('Profile picture URL stored to Firestore for user $email');
+    } catch (e) {
+      print('Error storing profile picture URL to Firestore: $e');
+    }
+  }
+
+  Future<BitmapDescriptor> _getCustomMarker(String imageUrl) async {
+    try {
+      final http.Response response = await http.get(Uri.parse(imageUrl));
+      final Uint8List bytes = response.bodyBytes;
+
+      final ui.Codec codec =
+          await ui.instantiateImageCodec(bytes, targetWidth: 100);
+      final ui.FrameInfo fi = await codec.getNextFrame();
+      final ByteData? byteData =
+          await fi.image.toByteData(format: ui.ImageByteFormat.png);
+      final Uint8List resizedBytes = byteData!.buffer.asUint8List();
+
+      // Convert the image to a circular shape
+      final ui.PictureRecorder pictureRecorder = ui.PictureRecorder();
+      final Canvas canvas = Canvas(pictureRecorder);
+      final Paint paint = Paint()..isAntiAlias = true;
+      final Radius radius = Radius.circular(50); // Radius for circular shape
+      canvas.drawRRect(
+        RRect.fromRectAndCorners(
+          Rect.fromLTWH(0.0, 0.0, 100.0, 100.0),
+          topLeft: radius,
+          topRight: radius,
+          bottomLeft: radius,
+          bottomRight: radius,
+        ),
+        paint
+          ..shader = ImageShader(
+            await _getImageFromMemory(resizedBytes),
+            TileMode.clamp,
+            TileMode.clamp,
+            Matrix4.identity().storage,
+          ),
+      );
+      final img = await pictureRecorder.endRecording().toImage(100, 100);
+      final ByteData? byteDataCircle =
+          await img.toByteData(format: ui.ImageByteFormat.png);
+      final Uint8List circleBytes = byteDataCircle!.buffer.asUint8List();
+
+      return BitmapDescriptor.fromBytes(circleBytes);
+    } catch (e) {
+      print('Error loading custom marker image: $e');
+      return BitmapDescriptor.defaultMarker;
+    }
+  }
+
+  Future<ui.Image> _getImageFromMemory(Uint8List byteData) async {
+    final Completer<ui.Image> completer = Completer();
+    ui.decodeImageFromList(byteData, (ui.Image img) {
+      return completer.complete(img);
+    });
+    return completer.future;
+  }
+
   Future<void> _getUserEmail() async {
     User? user = FirebaseAuth.instance.currentUser;
-    setState(() {
-      _userEmail =
-          user?.email; // Set the initial email to the current user's email
-    });
+    if (user != null) {
+      DocumentSnapshot userDoc = await FirebaseFirestore.instance
+          .collection('googleAccounts')
+          .doc(user.email)
+          .get();
+      if (userDoc.exists && userDoc['profileImageUrl'] != null) {
+        String profileImageUrl = userDoc['profileImageUrl'];
+        BitmapDescriptor customMarker = await _getCustomMarker(profileImageUrl);
+        setState(() {
+          _userEmail = user.email;
+          _currentMarkerIcon = customMarker;
+        });
+      } else {
+        setState(() {
+          _userEmail = user.email;
+          _currentMarkerIcon =
+              BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen);
+        });
+      }
+    }
   }
 
   Future<void> _getLocationUpdates() async {
@@ -58,7 +171,8 @@ class _MapPageState extends State<MapPage> {
           LocationService.locationStream.listen((LocationData locationData) {
         setState(() {
           _currentP = LatLng(locationData.latitude!, locationData.longitude!);
-          _uploadLocationToFirestore(locationData.latitude!, locationData.longitude!);
+          _uploadLocationToFirestore(
+              locationData.latitude!, locationData.longitude!);
         });
       });
     } catch (e) {
@@ -74,7 +188,7 @@ class _MapPageState extends State<MapPage> {
         String userEmail = user.email!;
         await FirebaseFirestore.instance
             .collection('googleAccounts')
-            .doc(userEmail) // Use the current user's email
+            .doc(userEmail)
             .set({
           'location': GeoPoint(latitude, longitude),
         }, SetOptions(merge: true));
@@ -106,27 +220,39 @@ class _MapPageState extends State<MapPage> {
 
       if (documentSnapshot.exists) {
         var locationData = documentSnapshot['location'] as GeoPoint?;
-        if (locationData != null) {
+        var profileImageUrl = documentSnapshot['profileImageUrl'] as String?;
+
+        if (locationData != null && profileImageUrl != null) {
           double latitude = locationData.latitude;
           double longitude = locationData.longitude;
           LatLng newLocation = LatLng(latitude, longitude);
+
+          BitmapDescriptor customMarker =
+              await _getCustomMarker(profileImageUrl);
+
           setState(() {
             _selectedLocation = newLocation;
+            _selectedMarkerIcon = customMarker;
           });
           _cameraToPosition(_currentP!, _selectedLocation!);
         }
 
-        _selectedUserLocationSubscription?.cancel(); // Cancel any previous subscription
+        _selectedUserLocationSubscription
+            ?.cancel(); // Cancel any previous subscription
         _selectedUserLocationSubscription =
-            documentSnapshot.reference.snapshots().listen((snapshot) {
+            documentSnapshot.reference.snapshots().listen((snapshot) async {
           if (snapshot.exists) {
             var locationData = snapshot['location'] as GeoPoint?;
-            if (locationData != null) {
+            var profileImageUrl = snapshot['profileImageUrl'] as String?;
+            if (locationData != null && profileImageUrl != null) {
               double latitude = locationData.latitude;
               double longitude = locationData.longitude;
               LatLng newLocation = LatLng(latitude, longitude);
+              BitmapDescriptor customMarker =
+                  await _getCustomMarker(profileImageUrl);
               setState(() {
                 _selectedLocation = newLocation;
+                _selectedMarkerIcon = customMarker;
               });
               _cameraToPosition(_currentP!, _selectedLocation!);
             }
@@ -166,7 +292,7 @@ class _MapPageState extends State<MapPage> {
       markers.add(
         Marker(
           markerId: MarkerId("_currentLocation"),
-          icon:
+          icon: _currentMarkerIcon ??
               BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
           position: _currentP!,
         ),
@@ -177,7 +303,7 @@ class _MapPageState extends State<MapPage> {
       markers.add(
         Marker(
           markerId: const MarkerId("_selectedLocation"),
-          icon: BitmapDescriptor.defaultMarker,
+          icon: _selectedMarkerIcon ?? BitmapDescriptor.defaultMarker,
           position: _selectedLocation!,
         ),
       );
@@ -241,9 +367,6 @@ class _MapPageState extends State<MapPage> {
           accounts: filteredAccounts,
           onEntitySelected: (emailDoc) {
             String email = emailDoc.id; // Use the document ID as the email
-            setState(() {
-              _userEmail = email; // Update the displayed email
-            });
             _fetchLocationFromFirestore(email);
           },
         );
